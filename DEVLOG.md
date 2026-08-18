@@ -97,3 +97,34 @@
     4번째부터 429로 정상 동작 확인 (IP 스푸핑에 더 이상 영향받지 않음).
 - 배포는 진행하지 않음 (로컬 코드 수정 + 로컬 재확인까지만). fly.io 재배포 후 실제
   `Fly-Client-IP` 헤더 기준으로 최종 동작을 한 번 더 확인 필요(사용자 배포 시 확인 권장).
+
+## 2026-08-18 (재배포 후에도 rate limit 미작동 — 디버그 로그 추가 + uvicorn proxy_headers 점검)
+- 사용자 보고: fly.io 재배포 후에도 rate limit이 전혀 걸리지 않음 (5회 연속 200).
+- 조치: `_get_client_ip()`가 실제 어떤 값을 반환하는지 fly.io 환경에서 직접 확인할 수 없으므로,
+  `RateLimitMiddleware.dispatch`에 매 요청마다 `fly-client-ip`/`x-forwarded-for` 원본 헤더값,
+  `remote_addr`(request.client.host), 최종 채택된 IP, 카운터 상태(`minute_hits_before`,
+  `daily_hits_before`)를 stdout으로 남기는 임시 디버그 로그 추가. 로컬 curl로 로그 정상
+  출력 확인 후 커밋/push (b140c12). 배포는 사용자가 직접 진행, `fly logs`로 확인 예정.
+- 병행 점검: uvicorn의 `--proxy-headers` 관련 동작이 `remote_addr`를 이미 오염시키고 있는지 확인.
+  - FastMCP 소스(`fastmcp/server/mixins/transport.py`)에서 `mcp.run()`이 내부적으로
+    `uvicorn.Config(app, host=host, port=port, **config_kwargs)`를 호출하며,
+    `config_kwargs`에 `proxy_headers`/`forwarded_allow_ips`를 명시적으로 넘기지 않음을 확인
+    (`server.py`의 `mcp.run()` 호출에도 해당 옵션 없음).
+  - uvicorn 기본값 직접 확인(`uvicorn.Config` 인스턴스 생성 후 속성 조회):
+    `proxy_headers=True`, `forwarded_allow_ips="127.0.0.1"`.
+  - 의미: `proxy_headers=True`이므로 uvicorn은 **직전 홉의 소켓 IP가 `forwarded_allow_ips`
+    (기본값 `127.0.0.1`) 목록에 있을 때만** `X-Forwarded-For` 헤더 값으로
+    `request.client.host`를 덮어씀. fly.io 배포 환경에서 컨테이너로 들어오는 직전 홉(fly-proxy)의
+    IP가 127.0.0.1이 아니라면 이 치환 자체가 발동하지 않아 `remote_addr`는 fly-proxy가 접속한
+    원본 소켓 IP 그대로 남을 가능성이 큼 — 즉 우리 코드의 최후순위 fallback(`request.client.host`)이
+    fly-proxy의 내부 IP로 고정되어 오히려 매번 "같은 IP"로 잡힐 개연성도 있음.
+  - 다만 이 uvicorn 레벨 오염은 `_get_client_ip()`의 최우선 순위인 `fly-client-ip` 헤더 자체에는
+    영향을 주지 않음(그 헤더는 애플리케이션 레벨에서 `request.headers`로 직접 읽으며, uvicorn이
+    가공하는 대상이 아님) — 따라서 "재배포 후에도 전혀 안 걸림" 현상의 1차 용의선상은 여전히
+    ① `fly-client-ip` 헤더가 이 fly.io 앱/네트워크 구성에서 실제로 전달되지 않는 경우,
+    ② rate limit 인메모리 dict가 매 요청/배포마다 리셋되는 경우(멀티 머신 분산, 오토스케일 등),
+    ③ 헤더 파싱 자체는 맞지만 다른 경로로 카운터가 항상 리셋되는 경우 세 가지로 좁혀짐.
+    확정은 `fly logs`의 실제 로그 값 확인 후 가능 — 코드 수정은 보류하고 사용자 확인 대기.
+- 결론: 코드 수정 없음(로그 추가만 커밋됨), 배포도 진행하지 않음. 사용자가 `fly logs`로
+  `[ratelimit-debug]` 로그 라인을 확인해 `fly-client-ip`/`x-forwarded-for`/`remote_addr`/
+  `resolved_ip` 값이 요청마다 어떻게 나오는지 확인 후 다음 조치 결정 예정.
