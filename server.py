@@ -113,6 +113,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         ip = _get_client_ip(request)
+        # TODO(임시 디버그 로그): rate limit이 배포 환경에서 걸리지 않는 원인 확인용.
+        # 확인 끝나면 제거할 것.
+        print(
+            f"[ratelimit-debug] resolved_ip={ip!r} "
+            f"fly-client-ip={request.headers.get('fly-client-ip')!r} "
+            f"x-forwarded-for={request.headers.get('x-forwarded-for')!r} "
+            f"remote_addr={request.client.host if request.client else None!r} "
+            f"minute_hits_before={len(_minute_hits[ip])} daily_hits_before={len(_daily_hits[ip])}",
+            flush=True,
+        )
         now = time.time()
 
         blocked_at = _blocked_until.get(ip)
