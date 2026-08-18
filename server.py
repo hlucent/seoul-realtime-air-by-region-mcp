@@ -96,6 +96,11 @@ BLOCK_DURATION = 86400
 
 
 def _get_client_ip(request: Request) -> str:
+    # fly.io 엣지가 직접 설정하는 헤더(클라이언트가 위조 불가)를 우선 신뢰한다.
+    # X-Forwarded-For는 클라이언트가 임의로 주입 가능해 rate limit 우회에 악용될 수 있다.
+    fly_client_ip = request.headers.get("fly-client-ip")
+    if fly_client_ip:
+        return fly_client_ip.strip()
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()

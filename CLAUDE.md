@@ -128,7 +128,10 @@ primary_region = 'nrt'
 
 구현 원칙:
 - in-memory(dict) 저장으로 충분, 외부 저장소 도입 금지
-- IP는 `X-Forwarded-For` 헤더에서 추출, 없으면 remote address 사용
+- IP는 `Fly-Client-IP` 헤더(fly.io 엣지가 직접 설정하며 클라이언트가 위조 불가)를 우선 신뢰하고,
+  없으면 `X-Forwarded-For` 헤더로 폴백, 그것도 없으면 remote address 사용
+  (`X-Forwarded-For`만 신뢰하면 클라이언트가 헤더를 임의로 위조해 rate limit을 우회할 수 있음 —
+  실측으로 확인된 문제, DEVLOG.md 참고)
 - 429 응답에 원인 메시지 포함 (예: "Rate limit exceeded. Try again later.")
 - `stateless_http=True`와 무관하게 유지 — 멀티 머신 간 카운터 미공유 허용, 완벽한 전역 동기화 시도 금지
 - FastMCP + Starlette: `BaseHTTPMiddleware` 서브클래싱 후
