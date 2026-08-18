@@ -51,3 +51,18 @@
 - rate limit 미들웨어(분당 3회/시간당 5회 위반 시 24시간 차단/일 30회) 구현 완료.
 - 확인 필요(추측 미해결): 없음 — DEVPLAN.md 2절 6개 항목 모두 실측 완료.
 - 다음 단계: git add/commit/push 후 사용자에게 `fly launch --no-deploy`부터 안내.
+
+## 2026-08-18 (rate limit 버그 수정)
+- 사용자 보고: 분당 3회 제한인데 실제로는 2번째 요청부터 429가 뜸.
+- 원인 분리: `RateLimitMiddleware.dispatch`가 메서드 구분 없이 모든 요청을 카운트하고 있었음.
+  MCP 클라이언트가 실제 POST 전에 CORS preflight `OPTIONS` 요청을 함께 보내면, 요청 1건당
+  카운터가 2씩(`OPTIONS` + `POST`) 올라가 "분당 3회" 제한이 실질적으로 "실 요청 1.5회" 수준으로
+  동작함을 로컬 curl 재현으로 확인.
+- 수정 전 실측 (curl, `Origin`/`Access-Control-Request-Method` 헤더 포함 OPTIONS 4회 연속):
+  각 OPTIONS 호출이 `_minute_hits`에 그대로 적재되어, 뒤이은 실제 POST 요청이 조기에 429 처리됨.
+- 수정 내용: `dispatch` 최상단에서 `request.method == "OPTIONS"`이면 카운팅 없이 즉시
+  `call_next(request)`로 통과.
+- 수정 후 재실측 (로컬, PORT=8125):
+  - OPTIONS 5회 연속 호출 → 전부 429 없음 (라우트 미지원으로 405, rate limit 카운터엔 영향 없음 확인)
+  - POST(initialize) 4회 연속 호출 → 1~3번째 200, 4번째 429로 "분당 3회 초과 시 429" 사양과 일치
+- 배포는 진행하지 않음 (로컬 코드 수정 + 로컬 재확인까지만).

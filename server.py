@@ -104,6 +104,9 @@ def _get_client_ip(request: Request) -> str:
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         ip = _get_client_ip(request)
         now = time.time()
 
